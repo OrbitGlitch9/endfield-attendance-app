@@ -18,7 +18,17 @@
 
         <activity
             android:name=".LoginActivity"
-            android:exported="false" />
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="endfield-attendance"
+                    android:host="auth" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name=".MainActivity"

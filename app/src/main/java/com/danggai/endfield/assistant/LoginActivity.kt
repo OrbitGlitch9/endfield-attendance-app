@@ -2,8 +2,10 @@ package com.danggai.endfield.assistant
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Message
 import android.util.Log
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -32,6 +34,8 @@ class LoginActivity : AppCompatActivity() {
 
     private val httpClient by lazy { OkHttpClient() }
 
+    private val desktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
@@ -52,10 +56,41 @@ class LoginActivity : AppCompatActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
-            userAgentString =
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+            userAgentString = desktopUa
             useWideViewPort = true
             loadWithOverviewMode = true
+            javaScriptCanOpenWindowsAutomatically = true
+            setSupportMultipleWindows(true)
+        }
+
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
+                val newWebView = WebView(this@LoginActivity)
+                newWebView.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    userAgentString = desktopUa
+                }
+                newWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): Boolean {
+                        val url = request?.url?.toString().orEmpty()
+                        webView.loadUrl(url)
+                        return true
+                    }
+                }
+                val transport = resultMsg?.obj as? WebView.WebViewTransport
+                transport?.webView = newWebView
+                resultMsg?.sendToTarget()
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -63,6 +98,7 @@ class LoginActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 logLogin("📄 onPageFinished")
+                checkTokenAndHarvest()
             }
 
             override fun shouldInterceptRequest(
@@ -71,19 +107,6 @@ class LoginActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 val url = request?.url?.toString().orEmpty()
                 val method = request?.method.orEmpty()
-
-                if (BuildConfig.DEBUG) {
-                    if (
-                        url.contains("binding", ignoreCase = true) ||
-                        url.contains("cookie_store", ignoreCase = true) ||
-                        url.contains("grant", ignoreCase = true) ||
-                        url.contains("token", ignoreCase = true) ||
-                        url.contains("basic", ignoreCase = true) ||
-                        url.contains("third_party", ignoreCase = true)
-                    ) {
-                        logLogin("📡 method=$method url=$url")
-                    }
-                }
 
                 val isBindingGet =
                     method.equals("GET", ignoreCase = true) &&
@@ -100,13 +123,6 @@ class LoginActivity : AppCompatActivity() {
 
                     logLogin("🎯 binding GET 감지 - 저장 플로우 시작")
 
-                    if (BuildConfig.DEBUG) {
-                        logLogin(
-                            "🧾 binding GET headers(meta) = " +
-                                    sanitizeHeaderLog(headerSnapshot)
-                        )
-                    }
-
                     loginScope.launch {
                         delay(120)
                         tryFetchAndSave(url, headerSnapshot)
@@ -116,6 +132,24 @@ class LoginActivity : AppCompatActivity() {
                 return super.shouldInterceptRequest(view, request)
             }
         }
+    }
+
+    private fun checkTokenAndHarvest() {
+        if (isHarvested || bindingFetchStarted) return
+        loginScope.launch {
+            CookieManager.getInstance().flush()
+            val token = getRealAccountTokenFromCookie()
+            if (!token.isNullOrEmpty()) {
+                bindingFetchStarted = true
+                logLogin("✅ ACCOUNT_TOKEN 감지 - role 및 저장 플로우 실행")
+                tryFetchAndSave("https://zonai.skport.com/api/v1/game/player/binding", emptyMap())
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        checkTokenAndHarvest()
     }
 
     private suspend fun tryFetchAndSave(
@@ -140,7 +174,7 @@ class LoginActivity : AppCompatActivity() {
 
         logLogin("------------------------------------------", isInfo = true)
         logLogin("🎁 최종 수집 성공!", isInfo = true)
-        logLogin(" - Token: ${mask(token)}", isInfo = true)
+        logLogin(" - Token: [PROTECTED]", isInfo = true)
         logLogin(" - RoleId: ${roleInfo.roleId}", isInfo = true)
         logLogin(" - Nickname: ${roleInfo.nickname}", isInfo = true)
         logLogin(" - ServerId: ${roleInfo.serverId}", isInfo = true)
@@ -205,11 +239,7 @@ class LoginActivity : AppCompatActivity() {
                     encodedToken
                 }
 
-                if (BuildConfig.DEBUG) {
-                    logLogin("✅ ACCOUNT_TOKEN 발견: ${mask(decoded)}")
-                } else {
-                    logLogin("✅ ACCOUNT_TOKEN 확보")
-                }
+                logLogin("✅ ACCOUNT_TOKEN 발견")
 
                 return decoded
             }
@@ -272,7 +302,7 @@ class LoginActivity : AppCompatActivity() {
                 if (!bindingHeaders.containsKey("User-Agent")) {
                     builder.header(
                         "User-Agent",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+                        desktopUa
                     )
                 }
 
@@ -400,39 +430,13 @@ class LoginActivity : AppCompatActivity() {
             .apply()
 
         logTrace("✅ 모든 데이터 저장 완료")
-        logTrace(" - token: ${mask(token)}")
+        logTrace(" - token: [PROTECTED]")
         logTrace(" - roleId: $roleId")
         logTrace(" - nickname: $name")
         logTrace(" - serverId: $serverId")
 
         startActivity(Intent(this, MainActivity::class.java))
         finish()
-    }
-
-    private fun sanitizeHeaderLog(headers: Map<String, String>): String {
-        val masked = linkedMapOf<String, String>()
-
-        headers.forEach { (key, value) ->
-            val maskedValue = when {
-                key.equals("cred", ignoreCase = true) -> mask(value)
-                key.equals("sign", ignoreCase = true) -> mask(value)
-                key.equals("timestamp", ignoreCase = true) -> "***"
-                key.equals("cookie", ignoreCase = true) -> "***"
-                else -> value
-            }
-            masked[key] = maskedValue
-        }
-
-        return masked.toString()
-    }
-
-    private fun mask(value: String?, keepStart: Int = 6, keepEnd: Int = 0): String {
-        if (value.isNullOrEmpty()) return "null"
-        if (value.length <= keepStart + keepEnd) return "***"
-
-        val start = value.take(keepStart)
-        val end = if (keepEnd > 0) value.takeLast(keepEnd) else ""
-        return if (end.isEmpty()) "$start..." else "$start...$end"
     }
 
     private fun logLogin(message: String, isError: Boolean = false, isInfo: Boolean = false) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebStorage
 import android.webkit.WebView
+import java.io.File
 
 object WebLoginManager {
 
@@ -24,8 +25,23 @@ object WebLoginManager {
                 clearCache(true)
                 clearHistory()
                 clearFormData()
+                clearSslPreferences()
                 destroy()
             }
+        } catch (_: Exception) {
+        }
+
+        try {
+            val dataDir = context.applicationInfo.dataDir
+            val webViewDir = File(dataDir, "app_webview")
+            if (webViewDir.exists()) {
+                webViewDir.deleteRecursively()
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            context.cacheDir?.deleteRecursively()
         } catch (_: Exception) {
         }
     }
